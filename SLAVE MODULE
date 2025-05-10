@@ -1,0 +1,60 @@
+#include <Wire.h>
+#include <AccelStepper.h>
+#include <MPU6050.h>
+
+// Pin definitions for A4988
+#define motor1StepPin 2
+#define motor1DirPin 3
+#define motor2StepPin 4
+#define motor2DirPin 5
+
+// Stepper driver setup
+AccelStepper stepper1(AccelStepper::DRIVER, motor1StepPin, motor1DirPin);
+AccelStepper stepper2(AccelStepper::DRIVER, motor2StepPin, motor2DirPin);
+
+// Gyroscope setup
+MPU6050 mpu;
+
+void setup() {
+  Serial.begin(9600);
+  Wire.begin();
+
+  // Initialize MPU6050
+  mpu.initialize();
+  if (!mpu.testConnection()) {
+    Serial.println("MPU6050 connection failed!");
+    while (1); // Stop program
+  } else {
+    Serial.println("MPU6050 connected.");
+  }
+
+  // Configure steppers
+  stepper1.setMaxSpeed(1000.0);
+  stepper1.setAcceleration(500.0);
+  stepper2.setMaxSpeed(1000.0);
+  stepper2.setAcceleration(500.0);
+}
+
+void loop() {
+  int16_t gx, gy, gz;
+
+  // Read angular velocity (gyro data)
+  mpu.getRotation(&gx, &gy, &gz);
+
+  // Map and constrain gyro values to motor speed range
+  float speed1 = constrain(mapFloat(gx, -15000, 15000, -500, 500), -500, 500);
+  float speed2 = constrain(mapFloat(gy, -15000, 15000, -500, 500), -500, 500);
+
+  stepper1.setSpeed(speed1);
+  stepper2.setSpeed(speed2);
+
+  stepper1.runSpeed();
+  stepper2.runSpeed();
+
+  delay(10); // Short delay for smoother operation
+}
+
+// Custom float mapping function
+float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
