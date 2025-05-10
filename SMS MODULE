@@ -1,0 +1,105 @@
+#include <SoftwareSerial.h>
+
+SoftwareSerial sim800(3, 2);  // SIM800L TX to pin 3, RX to pin 2
+
+// --- Pin configuration ---
+const int batteryPin = A0;     // Voltage divider for battery
+const int currentPin = A1;     // ACS712 analog output
+
+// --- Constants for battery voltage calculation ---
+const float maxBatteryVolt = 5.0;   // 100%
+const float minBatteryVolt = 3.3;   // 0%
+const float voltageRef = 5.0;       // Arduino analog ref
+
+// --- Constants for ACS712 ---
+const float acsOffset = 2.5;        // Zero current voltage
+const float sensitivity = 0.185;    // 185 mV/A for 5A module
+
+// --- Energy tracking ---
+float accumulatedEnergy = 0.0;  // in Wh
+unsigned long lastEnergyCalc = 0;
+unsigned long lastSMSSent = 0;
+
+const unsigned long smsInterval = 10UL * 60UL * 1000UL; // 10 minutes
+
+void setup() {
+  Serial.begin(9600);
+  sim800.begin(9600);
+  delay(1000);
+
+  initSIM800L();
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  float batteryLevel = readBatteryPercentage();
+  float current = readCurrent();
+  float outputPower = current * batteryLevel * (voltageRef / 1023.0 * analogRead(batteryPin)); // crude power estimate in W
+
+  // Update energy every loop (small time steps)
+  float deltaTime = (currentMillis - lastEnergyCalc) / 3600000.0; // hours
+  accumulatedEnergy += outputPower * deltaTime;
+  lastEnergyCalc = currentMillis;
+
+  // Send SMS every 10 minutes
+  if (currentMillis - lastSMSSent >= smsInterval) {
+    sendAlertSMS(batteryLevel, outputPower, accumulatedEnergy);
+    lastSMSSent = currentMillis;
+  }
+
+  delay(1000);  // avoid spamming reads
+}
+
+float readBatteryPercentage() {
+  int analogValue = analogRead(batteryPin);
+  float voltage = analogValue * voltageRef / 1023.0;
+  float percent = ((voltage - minBatteryVolt) / (maxBatteryVolt - minBatteryVolt)) * 100.0;
+  percent = constrain(percent, 0, 100);
+  return percent;
+}
+
+float readCurrent() {
+  float voltage = analogRead(currentPin) * voltageRef / 1023.0;
+  float current = (voltage - acsOffset) / sensitivity; // Amps
+  return current;
+}
+
+void initSIM800L() {
+  sendCommand("AT", 1000);
+  sendCommand("AT+CSQ", 1000);
+  sendCommand("AT+CCID", 1000);
+  sendCommand("AT+CREG?", 1000);
+}
+
+void sendAlertSMS(float battery, float power, float energyWh) {
+  String message = "NOTICE!\n\n";
+  message += "Solar system battery level is at ";
+  message += String(battery, 1) + "%. Please check the system to avoid shutdown.\n\n";
+  message += "Output Power = " + String(power, 1) + "%\n";
+  message += "Energy Accumulation Rate = " + String(energyWh, 2) + " Wh";
+
+  sendSMS("+639606035142", message);  
+}
+
+void sendCommand(String cmd, int wait) {
+  sim800.println(cmd);
+  delay(wait);
+  while (sim800.available()) {
+    Serial.write(sim800.read());
+  }
+}
+
+void sendSMS(String number, String text) {
+  sim800.println("AT+CMGF=1");  // SMS text mode
+  delay(1000);
+  sim800.print("AT+CMGS=\"");
+  sim800.print(number);
+  sim800.println("\"");
+  delay(1000);
+  sim800.println(text);
+  delay(500);
+  sim800.write(26);  // Ctrl+Z
+  delay(5000);
+  Serial.println("SMS sent.");
+}
