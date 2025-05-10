@@ -1,0 +1,146 @@
+#include <Wire.h>
+#include <Ds1302.h>
+#include <MPU6050.h>
+
+// RTC module connections
+const int kCePin = 2;
+const int kIoPin = 3;
+const int kSclkPin = 4;
+
+Ds1302 rtc(kCePin, kIoPin, kSclkPin);
+MPU6050 mpu;
+
+double M, Y, D, MN, H, S;
+double A, B;
+double location = 120.9842; // Manila Longitude
+double LST_degrees;
+double LST_hours;
+unsigned long timer = 0;
+float timeStep = 0.01;
+
+double pitch = 0;
+double yaw = 0;
+double val = 0;
+double val2 = 0;
+double temp = val2;
+
+// Pin definitions
+const int stahp = 7, stahp2 = 10;
+const int cw = 8, cw2 = 11;
+const int ccw = 6, ccw2 = 9;
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(stahp, OUTPUT);
+  pinMode(cw, OUTPUT);
+  pinMode(ccw, OUTPUT);
+  pinMode(stahp2, OUTPUT);
+  pinMode(cw2, OUTPUT);
+  pinMode(ccw2, OUTPUT);
+
+  Wire.begin();
+  mpu.initialize();
+  mpu.CalibrateGyro();
+
+  rtc.init();
+
+  // UNCOMMENT THIS ONCE to set time manually
+  /*
+  Ds1302::DateTime dt = {
+    .year = 2025,
+    .month = 4,
+    .day = 20,
+    .hour = 12,
+    .minute = 0,
+    .second = 0
+  };
+  rtc.setDateTime(&dt);
+  */
+
+  delay(5000);
+}
+
+void loop() {
+  Ds1302::DateTime now;
+  rtc.getDateTime(&now); // Read current date and time into now
+
+  LST_time(now);
+  recvdata();
+  pitch_check();
+  yaw_check();
+
+  timer = millis();
+
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  float gyroX = gx / 131.0;
+  float gyroY = gy / 131.0;
+
+  yaw += gyroY * timeStep;
+  pitch += gyroX * timeStep;
+
+  Serial.print("Yaw = ");
+  Serial.print(yaw);
+  Serial.print(" Pitch = ");
+  Serial.print(pitch);
+  Serial.print(" LST_d = ");
+  Serial.print(LST_degrees);
+  Serial.print(" LST_h = ");
+  Serial.println(LST_hours);
+
+  delay((timeStep * 1000) - (millis() - timer));
+}
+
+void recvdata() {
+  if (Serial.available() > 0) {
+    String a = Serial.readString();
+    String value1, value2;
+
+    for (int i = 0; i < a.length(); i++) {
+      if (a.substring(i, i + 1) == ",") {
+        value2 = a.substring(0, i);
+        value1 = a.substring(i + 1);
+        break;
+      }
+    }
+    val = 90 - value1.toFloat();
+    val2 = value2.toFloat();
+    temp = val2;
+  }
+}
+
+void pitch_check() {
+  if (floor(pitch * 100) / 100 == floor(val * 100) / 100) digitalWrite(stahp, HIGH);
+  else digitalWrite(stahp, LOW);
+
+  digitalWrite(cw, floor(pitch * 100) < floor(val * 100) ? HIGH : LOW);
+  digitalWrite(ccw, floor(pitch * 100) > floor(val * 100) ? HIGH : LOW);
+}
+
+void yaw_check() {
+  if (floor(yaw * 100) == floor(val2 * 100)) digitalWrite(stahp2, HIGH);
+  else digitalWrite(stahp2, LOW);
+
+  digitalWrite(cw2, floor(yaw * 100) < floor(val2 * 100) ? HIGH : LOW);
+  digitalWrite(ccw2, floor(yaw * 100) > floor(val2 * 100) ? HIGH : LOW);
+}
+
+void LST_time(Ds1302::DateTime now) {
+  M = now.month;
+  Y = now.year;
+  D = now.day;
+  MN = now.minute;
+  H = now.hour;
+  S = now.second;
+
+  A = (Y - 2000) * 365.242199;
+  B = (M - 1) * 30.4368499;
+  double JDN2000 = A + B + (D - 1) + H / 24;
+  double decimal_time = H + (MN / 60) + (S / 3600);
+  double LST = 100.46 + 0.985647 * JDN2000 + location + 15 * decimal_time;
+
+  LST_degrees = fmod(LST, 360.0);
+  LST_hours = LST_degrees / 15.0;
+}
